@@ -17,7 +17,7 @@ double** generate_matrix(int dim) {
 	srand(2);
 	for(i=0;i<dim;i++) {
 		for(j=0;j<dim;j++) {
-			matrix[i][j] = (float) (rand() % 20)+1;
+			matrix[i][j] = (double) (rand() % 20)+1;
 		}
 	}
 	return matrix; 
@@ -170,13 +170,13 @@ void parallel_lu(int argc, char **argv, double **matrix, int dim, int block_dim,
 	//Main computation loop
 	for(k=0;k<dim;k++) {
 		//Send & recieve pivot row
-		//Recieve PBuffRec from top and send PBuffSend to bottom (order here is important)
+		//Recieve PBuffRec from top
 		bool kInMyRows = k >= row_start && k <= row_end;
-		bool kInTopRows = k >= row_start-block_dim && k <= row_end-block_dim;
+		bool kInTopRows = k <= row_end-block_dim;
 		if(topRank >= 0 && kInTopRows) {
 			MPI_Recv(PBuffRecv, block_dim, MPI_DOUBLE, topRank, 0, MPI_COMM_WORLD, &status);
 			if(rank==rank2print) {
-				printf("Received pivot row from rank %i: ",topRank);
+				printf("Received pivot row from rank %i for k = %i: ",topRank,k);
 				print_vector(block_dim,PBuffRecv);
 			}
 			//Place PBuffRecv in correct place of matrix
@@ -186,22 +186,37 @@ void parallel_lu(int argc, char **argv, double **matrix, int dim, int block_dim,
 				}
 			}
 		}
-		if(botRank >= 0 && kInMyRows) {
-			//Assemble PBuffSend
-			for(j=col_start;j<=col_end;j++) {
-				if(j>=k) {
-					PBuffSend[j-col_start] = matrix[k][j];
+		//send PBuffSend to bottom 
+		if(botRank >= 0) {
+			if(kInMyRows) { //pivot row is generated from this process
+				//Assemble PBuffSend
+				for(j=col_start;j<=col_end;j++) {
+					if(j>=k) {
+						PBuffSend[j-col_start] = matrix[k][j];
+					}
+				}
+				if(rank==rank2print) {
+					printf("Sending pivot row to rank %i for k = %i (Creating): ",botRank,k);
+					print_vector(block_dim,PBuffSend);
 				}
 			}
-			if(rank==rank2print) {
-				printf("Sending pivot row to rank %i: ",botRank);
-				print_vector(block_dim,PBuffSend);
+			else if(kInTopRows) { //pivot row is generated in a top process; just pass the recieved one along
+				//Assemble PBuffSend
+				for(j=col_start;j<=col_end;j++) {
+					if(j>=k) {
+						PBuffSend[j-col_start] = PBuffRecv[j-col_start];
+					}
+				}
+				if(rank==rank2print) {
+					printf("Sending pivot row to rank %i for k = %i (Passing): ",botRank,k);
+					print_vector(block_dim,PBuffSend);
+				}
 			}
 			MPI_Isend(PBuffSend, block_dim, MPI_DOUBLE, botRank, 0, MPI_COMM_WORLD, &request);
 		} 
 
 		//Calculate ratios
-		bool kInMyCols = (k>=col_start && k<=col_end);
+		bool kInMyCols = k>=col_start && k<=col_end;
 		if(kInMyCols) {
 			for(i=row_start;i<=row_end;i++) {
 				if (i>k) {
@@ -219,9 +234,9 @@ void parallel_lu(int argc, char **argv, double **matrix, int dim, int block_dim,
 			print_matrix_chunk(block_dim,row_start,col_start,L);
 		}
 
+		bool kInLeftCols = k <= col_end-block_dim;
 		//Send & recieve ratios
-		//Recieve LBuffRec from left and send LBuffSend to right (order here is important)
-		bool kInLeftCols = k >= col_start-block_dim && k <= col_end-block_dim;
+		//Recieve LBuffRec from left
 		if(leftRank >= 0 && kInLeftCols) {
 			MPI_Recv(LBuffRecv, block_dim, MPI_DOUBLE, leftRank, 0, MPI_COMM_WORLD, &status);
 			if(rank==rank2print) {
@@ -235,16 +250,31 @@ void parallel_lu(int argc, char **argv, double **matrix, int dim, int block_dim,
 				}
 			}
 		}
-		if(rightRank >= 0 && kInMyCols) {
-			//Assemble LBuffSend
-			for(i=row_start;i<=row_end;i++) {
-				if(i>k) {
-					LBuffSend[i-row_start] = L[i][k];
+		//send LBuffSend to right
+		if(rightRank >= 0) { 
+			if(kInMyCols) {  //ratio is generated from this process
+				//Assemble LBuffSend
+				for(i=row_start;i<=row_end;i++) {
+					if(i>k) {
+						LBuffSend[i-row_start] = L[i][k];
+					}
+				}
+				if(rank==rank2print) {
+					printf("Sending L to rank %i for k = %i: (Creating)",rightRank,k);
+					print_vector(block_dim,LBuffSend);
 				}
 			}
-			if(rank==rank2print) {
-				printf("Sending L to rank %i: ",rightRank);
-				print_vector(block_dim,LBuffSend);
+			else if(kInLeftCols) { //ratio is generated in a left process; just pass the recieved one along
+				//Assemble LBuffSend
+				for(i=row_start;i<=row_end;i++) {
+					if(i>k) {
+						LBuffSend[i-row_start] = LBuffRecv[i-row_start];
+					}
+				}
+				if(rank==rank2print) {
+					printf("Sending L to rank %i for k = %i (Passing): ",rightRank,k);
+					print_vector(block_dim,LBuffSend);
+				}
 			}
 			MPI_Isend(LBuffSend, block_dim, MPI_DOUBLE, rightRank, 0, MPI_COMM_WORLD, &request);
 		}
@@ -263,10 +293,12 @@ void parallel_lu(int argc, char **argv, double **matrix, int dim, int block_dim,
 		//Wait for LBuffSend to be usable
 		if(rightRank >= 0 && kInMyCols)
 			MPI_Wait(&request, &status);
-	}
-	if(rank==rank2print) {
-		printf("U:\n");
-		print_matrix_chunk(block_dim,row_start,col_start,matrix);
+
+		if(rank==rank2print) {
+			printf("U:\n");
+			print_matrix_chunk(block_dim,row_start,col_start,matrix);
+		}
+
 	}
 
 	/*
@@ -341,7 +373,7 @@ void serial_lu(double **matrix, int dim) {
 	for(j=0;j<dim;j++) {
 		// rows
 		for(i=j+1;i<dim;i++) {
-			float ratio = matrix[i][j]/matrix[j][j];
+			double ratio = matrix[i][j]/matrix[j][j];
 			L[i][j] = ratio;
 			for(k=0;k<dim;k++) {
 				matrix[i][k] -= ratio*matrix[j][k];
