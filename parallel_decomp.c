@@ -169,11 +169,17 @@ void parallel_lu(int argc, char **argv, double **matrix, int dim, int block_dim,
 
 	//Main computation loop
 	for(k=0;k<dim;k++) {
-		//Send & recieve pivot row
-		//Recieve PBuffRec from top
 		bool kInMyRows = k >= row_start && k <= row_end;
 		bool kInTopRows = k <= row_end-block_dim;
-		if(topRank >= 0 && kInTopRows) {
+		bool kInBotRows = k >= row_start+block_dim;
+		
+		bool kInMyCols = k>=col_start && k<=col_end;
+		bool kInLeftCols = k <= col_end-block_dim;
+		bool kInRightCols = k >= col_start+block_dim;
+
+		//Send & recieve pivot row
+		//Recieve PBuffRec from top
+		if(topRank >= 0 && kInTopRows && !kInRightCols) {
 			MPI_Recv(PBuffRecv, block_dim, MPI_DOUBLE, topRank, 0, MPI_COMM_WORLD, &status);
 			if(rank==rank2print) {
 				printf("Received pivot row from rank %i for k = %i: ",topRank,k);
@@ -187,7 +193,7 @@ void parallel_lu(int argc, char **argv, double **matrix, int dim, int block_dim,
 			}
 		}
 		//send PBuffSend to bottom 
-		if(botRank >= 0) {
+		if(botRank >= 0 && !kInRightCols) {
 			if(kInMyRows) { //pivot row is generated from this process
 				//Assemble PBuffSend
 				for(j=col_start;j<=col_end;j++) {
@@ -216,7 +222,7 @@ void parallel_lu(int argc, char **argv, double **matrix, int dim, int block_dim,
 		} 
 
 		//Calculate ratios
-		bool kInMyCols = k>=col_start && k<=col_end;
+		
 		if(kInMyCols) {
 			for(i=row_start;i<=row_end;i++) {
 				if (i>k) {
@@ -234,10 +240,9 @@ void parallel_lu(int argc, char **argv, double **matrix, int dim, int block_dim,
 			print_matrix_chunk(block_dim,row_start,col_start,L);
 		}
 
-		bool kInLeftCols = k <= col_end-block_dim;
 		//Send & recieve ratios
 		//Recieve LBuffRec from left
-		if(leftRank >= 0 && kInLeftCols) {
+		if(leftRank >= 0 && kInLeftCols && !kInBotRows) {
 			MPI_Recv(LBuffRecv, block_dim, MPI_DOUBLE, leftRank, 0, MPI_COMM_WORLD, &status);
 			if(rank==rank2print) {
 				printf("Recieved L from rank %i: ",leftRank);
@@ -251,7 +256,7 @@ void parallel_lu(int argc, char **argv, double **matrix, int dim, int block_dim,
 			}
 		}
 		//send LBuffSend to right
-		if(rightRank >= 0) { 
+		if(rightRank >= 0 && !kInBotRows) { 
 			if(kInMyCols) {  //ratio is generated from this process
 				//Assemble LBuffSend
 				for(i=row_start;i<=row_end;i++) {
