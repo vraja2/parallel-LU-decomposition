@@ -432,8 +432,8 @@ void parallel_lu_cyclic(int argc, char **argv, double **matrix, int dim, int blo
 		}
 
 		//Compute upper triangular matrix
-		#pragma omp parallel for private(j,i,ii,jj) firstprivate(k) 
 		for(jj = 0; jj<blocksInRank;jj++) {
+			#pragma omp parallel for private(j,i,ii) firstprivate(k,jj)
 			for (j=colsInRank[jj];j<colsInRank[jj]+block_dim;j++) {
 				if (j>=k) {
 					for(ii = 0; ii<blocksInRank; ii++) {
