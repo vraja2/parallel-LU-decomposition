@@ -94,15 +94,15 @@ double **matrix_mult(double **A, double **B, int dim) {
   }
   return result;
 }
-
+/*
 void serial_lu(double **matrix, int dim) {
   double **P = create_perm_matrix(matrix,dim);
   double **permuted_mat = matrix_mult(P,matrix,dim);
   double **L = create_zero_matrix(dim);
-  /* 
+ 
   printf("A=\n");
   print_matrix(dim,permuted_mat);
-  */
+  
   int i,j,k;
   // initialize diagonal of L to 1
   for(i=0;i<dim;i++) {
@@ -121,14 +121,56 @@ void serial_lu(double **matrix, int dim) {
     }
   }
   
-  /*
+  
   printf("L=\n");
   print_matrix(dim,L);
   printf("U=\n");
   print_matrix(dim,permuted_mat);
   printf("L*U=\n");
   print_matrix(dim,matrix_mult(L,permuted_mat,dim));
-  */
+  
+}*/
+
+void serial_lu(double **matrix, int dim) {
+	/*int procs;
+	int rank;
+	MPI_Comm_size(MPI_COMM_WORLD, &procs);
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);*/
+	double **L = create_zero_matrix(dim);
+
+	/*if(rank==0) {
+		printf("A=\n");
+		print_matrix(dim,matrix);
+	}*/
+
+	int i,j,k;
+	// initialize diagonal of L to 1
+	for(i=0;i<dim;i++) {
+		L[i][i] = 1;
+	}
+
+	// columns
+	for(j=0;j<dim;j++) {
+		// rows
+		for(i=j+1;i<dim;i++) {
+			double ratio = matrix[i][j]/matrix[j][j];
+			L[i][j] = ratio;
+			for(k=0;k<dim;k++) {
+				matrix[i][k] -= ratio*matrix[j][k];
+			}
+		}
+	}
+
+	//Print serial results for proc 0 only (computation done on all)
+	/*if(rank == 0) {
+		printf("L=\n");
+		print_matrix(dim,L);
+		printf("U=\n");
+		print_matrix(dim,matrix);
+		printf("L*U=\n");
+		print_matrix(dim,matrix_mult(L,matrix,dim));
+	}*/
+	free_matrix(dim,L);
 }
 
 void run_decompositions(int *dims, int n) {
@@ -146,11 +188,15 @@ void run_decompositions(int *dims, int n) {
   } 
 }
 
-int main() {
-  int dim = 10; 
+int main(int argc, char **argv) {
+  int dim = atoi(argv[1]);
   double **matrix = generate_matrix(dim);
-  int dims[3] = {5,10,15};
-  run_decompositions(dims,3);
+  clock_t begin, end;
+  begin = clock();
+  serial_lu(matrix, dim);
+  end = clock();
+  double time_spent = (double) (end-begin) / CLOCKS_PER_SEC;
+  printf("Took %f seconds for dim=%i\n",time_spent,dim);
   free_matrix(dim,matrix);
   return 0;
 }
