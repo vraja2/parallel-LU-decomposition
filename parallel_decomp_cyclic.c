@@ -5,6 +5,7 @@
 #include <time.h>
 #include <math.h>
 #include <mpi.h>
+#include <omp.h>
 
 #define printdebug 0
 
@@ -120,7 +121,8 @@ double **create_zero_matrix(int dim) {
 	return matrix;
 }
 
-void parallel_lu_cyclic(int argc, char **argv, double **matrix, int dim, int block_dim, int rank2print, int doSerial) {
+void parallel_lu_cyclic(int argc, char **argv, double **matrix, int dim, int block_dim, int rank2print, int doSerial, int numThreads) {
+	omp_set_num_threads(numThreads);
 	int procs;
 	int rank;
 	MPI_Comm_size(MPI_COMM_WORLD, &procs);
@@ -430,6 +432,7 @@ void parallel_lu_cyclic(int argc, char **argv, double **matrix, int dim, int blo
 		}
 
 		//Compute upper triangular matrix
+		#pragma omp parallel for private(j,i,ii,jj) firstprivate(k) 
 		for(jj = 0; jj<blocksInRank;jj++) {
 			for (j=colsInRank[jj];j<colsInRank[jj]+block_dim;j++) {
 				if (j>=k) {
@@ -527,6 +530,7 @@ void serial_lu(double **matrix, int dim) {
 
 
 int main(int argc, char **argv) {
+	double time,avg;
 	MPI_Init(&argc, &argv);
 	int procs;
 	int rank;
@@ -540,30 +544,37 @@ int main(int argc, char **argv) {
 	}
 
 	//Read input arguements
-	if(argc < 3) {
+	if(argc < 4) {
 		if(rank == 0)
-			fprintf(stderr,"Wrong # of arguments.\nUsage: mpirun -n $procs %s $dim $block_dim $rank2print $doSerial (Only dim & width is required; other 2 are optional)\n",argv[0]);
+			fprintf(stderr,"Wrong # of arguments.\nUsage: mpirun -n $procs %s $dim $numThreads $block_dim $rank2print $doSerial (Only dim, numThreads & width is required; other 2 are optional)\n",argv[0]);
 		return -1;
 	}
 	int dim = atoi(argv[1]);
-	int block_dim = atoi(argv[2]);
+	int numThreads = atoi(argv[2]);
+	int block_dim = atoi(argv[3]);
 	//int block_dim = dim/(sqrt(procs));
 	int rank2print = -1;
 	int doSerial = 0;
-	if(argc == 4) {
-		rank2print = atoi(argv[3]);
-	}
 	if(argc == 5) {
-		rank2print = atoi(argv[3]); 
-		doSerial = atoi(argv[4]);
+		rank2print = atoi(argv[4]);
+	}
+	if(argc == 6) {
+		rank2print = atoi(argv[4]); 
+		doSerial = atoi(argv[5]);
 	}
 
 	//Run code
 	if(rank==0)
-		printf("Running code on %i procs with dim = %i; block_dim = %i; printing on rank %i; doSerial = %i \n",procs, dim, block_dim, rank2print, doSerial);
+		printf("Running cyclic code on %i procs with dim = %i; numThreads = %i; block_dim = %i; printing on rank %i; doSerial = %i \n",procs, dim, numThreads, block_dim, rank2print, doSerial);
 	if(doSerial==1) 
 		serial_lu(generate_matrix(dim),dim);
-	parallel_lu_cyclic(argc, argv, generate_matrix(dim), dim, block_dim, rank2print, doSerial);
+	time = MPI_Wtime();
+	parallel_lu_cyclic(argc, argv, generate_matrix(dim), dim, block_dim, rank2print, doSerial, numThreads);
+	 time = MPI_Wtime() - time;
+	MPI_Reduce(&time, &avg, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+	if(rank == 0) {
+		printf("Dim = %i, Block Dim = %i, Procs = %i, Threads = %i, Average time: %e\n", dim, block_dim, procs, numThreads, avg/procs);
+	}
 	MPI_Finalize();
 	return 0;
 }
