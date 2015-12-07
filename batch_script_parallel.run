@@ -1,0 +1,30 @@
+#!/bin/bash
+#PBS -l walltime=00:30:00
+#PBS -l nodes=8:ppn=12
+#PBS -N lu_parallel
+#PBS -q cs
+#PBS -j oe
+
+# Load MPI module (Enable MPI in user environment) 
+module load mvapich2/2.1rc1-intel-15.0
+
+# Change to the directory from which the batch job was submitted
+cd $PBS_O_WORKDIR
+
+# Create a temporary hostfile to run a sinlge mpi task per node
+uniq ${PBS_NODEFILE} > /tmp/${USER}_NODEFILE
+
+dim=5000
+
+echo "======================Parallel LU start=============================" >> parallel_lu.txt
+for nodes in 16 25 64
+do
+for cores in 1 2 4 8 12 16 24
+do
+    mpirun -np $nodes -hostfile /tmp/${USER}_NODEFILE ./parallel_decomp ${dim} ${cores} -2 0 >> parallel_lu.txt
+done
+done
+echo "======================Parallel LU end=============================" >> out_mp4.txt
+
+# Remove temporary hostfile
+rm -r /tmp/${USER}_NODEFILE

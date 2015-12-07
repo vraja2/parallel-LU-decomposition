@@ -1,0 +1,16 @@
+#!/bin/bash
+#PBS -l walltime=00:30:00
+#PBS -l nodes=1:ppn=1:taub
+#PBS -N lu_serial
+#PBS -j oe
+
+cd $PBS_O_WORKDIR
+
+echo "====================== Serial start =============================" >> lu_serial.txt
+for dim in  10 20 30 40 60 120 240 480 1000 2000 3000 4000 5000
+do
+    echo "Running serial_lu with dim=${dim}" >> lu_serial.txt
+    ./serial_decomp ${dim} >> lu_serial.txt
+    echo " " >> lu_serial.txt
+done
+echo "====================== Serial done =============================" >> lu_serial.txt
