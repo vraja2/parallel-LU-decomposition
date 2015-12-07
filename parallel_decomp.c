@@ -5,7 +5,7 @@
 #include <time.h>
 #include <math.h>
 #include <mpi.h>
-
+#include <omp.h>
 
 double** generate_matrix(int dim) {
 	double **matrix = (double**) malloc(dim*sizeof(double*));
@@ -97,8 +97,9 @@ double **create_zero_matrix(int dim) {
 	return matrix;
 }
 
-void parallel_lu(int argc, char **argv, double **matrix, int dim, int block_dim, int rank2print, int doSerial) {
-	int procs;
+void parallel_lu(int argc, char **argv, double **matrix, int dim, int block_dim, int rank2print, int doSerial, int numThreads) {
+	omp_set_num_threads(numThreads);
+  int procs;
 	int rank;
 	MPI_Comm_size(MPI_COMM_WORLD, &procs);
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -285,6 +286,7 @@ void parallel_lu(int argc, char **argv, double **matrix, int dim, int block_dim,
 		}
 
 		//Compute upper triangular matrix
+    #pragma omp parallel for private(j,i) firstprivate(k,col_start,col_end) 
 		for (j=col_start;j<=col_end;j++) {
 			if (j>=k) {
 				for (i=row_start;i<=row_end;i++) {
@@ -404,7 +406,8 @@ int main(int argc, char **argv) {
 	//int dims[3] = {5,10,15};
 	//int dim = 4;
 	//int block_dim = 2;
-	MPI_Init(&argc, &argv);
+  double time,avg;
+  MPI_Init(&argc, &argv);
 	int procs;
 	int rank;
 	MPI_Comm_size(MPI_COMM_WORLD, &procs);
@@ -419,27 +422,34 @@ int main(int argc, char **argv) {
 	//Read input arguements
 	if(argc < 2) {
 		if(rank == 0)
-			fprintf(stderr,"Wrong # of arguments.\nUsage: mpirun -n procs %s dim rank2print doSerial (Only dim is required; other 2 are optional)\n",argv[0]);
+			fprintf(stderr,"Wrong # of arguments.\nUsage: mpirun -n procs %s dim numThreads rank2print doSerial(Only dim and numThreads are required; other 2 are optional)\n",argv[0]);
 		return -1;
 	}
 	int dim = atoi(argv[1]);
+  int numThreads = atoi(argv[2]);
 	int block_dim = dim/(sqrt(procs));
 	int rank2print = -1;
 	int doSerial = 0;
-	if(argc == 3) {
-		rank2print = atoi(argv[2]);
-	}
 	if(argc == 4) {
-		rank2print = atoi(argv[2]); 
-		doSerial = atoi(argv[3]);
+		rank2print = atoi(argv[3]);
+	}
+	if(argc == 5) {
+		rank2print = atoi(argv[3]); 
+		doSerial = atoi(argv[4]);
 	}
 
 	//Run code
 	if(rank==0)
-		printf("Running code on %i procs with dim = %i; block_dim = %i; printing on rank %i; doSerial = %i \n",procs, dim, block_dim, rank2print, doSerial);
+		printf("Running code on %i procs with dim = %i; numThreads = %i; block_dim = %i; printing on rank %i; doSerial = %i \n",procs, dim, numThreads, block_dim, rank2print, doSerial);
 	if(doSerial==1) 
 		serial_lu(generate_matrix(dim),dim);
-	parallel_lu(argc, argv, generate_matrix(dim), dim, block_dim, rank2print, doSerial);
-	MPI_Finalize();
+  time = MPI_Wtime();
+  parallel_lu(argc, argv, generate_matrix(dim), dim, block_dim, rank2print, doSerial, numThreads);
+  time = MPI_Wtime() - time;
+  MPI_Reduce(&time, &avg, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+  if(rank == 0) {
+    printf("Dim = %i, Procs = %i, Threads = %i, Average time: %e\n", dim, procs, numThreads, avg/procs);
+  }
+  MPI_Finalize();
 	return 0;
 }
