@@ -8,7 +8,12 @@
 #include <omp.h>
 
 #define printdebug 0
+#define doPAPI 0
+#define ompDebug 0
 
+#if doPAPI==1
+#include "support.h"
+#endif
 
 double** generate_matrix(int dim) {
 	double **matrix = (double**) malloc(dim*sizeof(double*));
@@ -165,7 +170,7 @@ void parallel_lu_cyclic(int argc, char **argv, double **matrix, int dim, int blo
 	double *PBuffRecv = (double*) malloc (numsInRank * sizeof(double));
 	int LBuffCtr, PBuffCtr;
 	int LSendCtr, PSendCtr; //Counters to ensure each process gets new data only once
-	int sendMax = procs;
+	int sendMax = 4*dim;
 
 	int i,ii,j,jj,k;
 	// initialize buffers
@@ -251,6 +256,7 @@ void parallel_lu_cyclic(int argc, char **argv, double **matrix, int dim, int blo
 		printf("\n");
 		printf("Original matrix on this process is: \n");
 		print_matrix_chunk_cyclic(block_dim, blocksInRank, rowsInRank, colsInRank, matrix);
+		printf("numThreads is: %i\n",numThreads);
 	}
 
 
@@ -277,7 +283,7 @@ void parallel_lu_cyclic(int argc, char **argv, double **matrix, int dim, int blo
 		PSendCtr = 0;
 		for(i=0; i<blocksInRank; i++) {
 			//Recieve PBuffRec from top
-			if(!atTopBound[i] && kInTopRows[i] && PSendCtr<=sendMax) {
+			if(!atTopBound[i] && kInTopRows[i]) {
 				PBuffCtr = 0;
 				MPI_Recv(PBuffRecv, numsInRank, MPI_DOUBLE, topRank, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 				PSendCtr = status.MPI_TAG;
@@ -297,7 +303,7 @@ void parallel_lu_cyclic(int argc, char **argv, double **matrix, int dim, int blo
 				}
 			}
 			//send PBuffSend to bottom 
-			if(!atBotBound[i] && PSendCtr<=sendMax) {
+			if(!atBotBound[i]) {
 				if(kInMyRows[i]) { //pivot row is generated from this process
 					PBuffCtr = 0;
 					++PSendCtr;
@@ -369,7 +375,7 @@ void parallel_lu_cyclic(int argc, char **argv, double **matrix, int dim, int blo
 		LSendCtr=0;
 		for(j=0; j<blocksInRank; j++) {
 			//Recieve LBuffRec from left
-			if(!atLeftBound[j] && kInLeftCols[j] && LSendCtr<=sendMax) {
+			if(!atLeftBound[j] && kInLeftCols[j]) {
 				LBuffCtr=0;
 				MPI_Recv(LBuffRecv, numsInRank, MPI_DOUBLE, leftRank, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 				LSendCtr = status.MPI_TAG;
@@ -389,7 +395,7 @@ void parallel_lu_cyclic(int argc, char **argv, double **matrix, int dim, int blo
 				}
 			}
 			//send LBuffSend to right
-			if(!atRightBound[j] && LSendCtr<=sendMax) { 
+			if(!atRightBound[j]) { 
 				if(kInMyCols[j]) {  //ratio is generated from this process
 					LBuffCtr = 0;
 					++LSendCtr;
@@ -431,14 +437,19 @@ void parallel_lu_cyclic(int argc, char **argv, double **matrix, int dim, int blo
 			}
 		}
 
+
 		//Compute upper triangular matrix
+		int tid;
+		#pragma omp parallel for private(j,i,ii) firstprivate(k) collapse(2)
 		for(jj = 0; jj<blocksInRank;jj++) {
-			#pragma omp parallel for private(j,i,ii) firstprivate(k,jj)
-			for (j=colsInRank[jj];j<colsInRank[jj]+block_dim;j++) {
-				if (j>=k) {
-					for(ii = 0; ii<blocksInRank; ii++) {
+			for(ii = 0; ii<blocksInRank; ii++) {
+				tid = omp_get_thread_num();
+				for(j=colsInRank[jj];j<colsInRank[jj]+block_dim;j++) {
+					if (j>=k) {
 						for (i=rowsInRank[ii];i<rowsInRank[ii]+block_dim;i++) {
 							if (i>k) {
+								if(rank==0 && ompDebug==1)
+									printf("Thread %i:jj=%i,ii=%i;j=%i;i=%i\n",tid,jj,ii,j,i);
 								matrix[i][j] = matrix[i][j]-L[i][k]*matrix[k][j];
 							}
 						}
@@ -537,6 +548,11 @@ int main(int argc, char **argv) {
 	MPI_Comm_size(MPI_COMM_WORLD, &procs);
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+#if doPAPI==1
+	data = 0;
+	papi_setup();
+#endif
+
 	//Check if number of processes is a perfect square
 	if (sqrt(procs) != floor(sqrt(procs))) {
 		printf("Number of processes is not a perfect square!\n");
@@ -568,13 +584,19 @@ int main(int argc, char **argv) {
 		printf("Running cyclic code on %i procs with dim = %i; numThreads = %i; block_dim = %i; printing on rank %i; doSerial = %i \n",procs, dim, numThreads, block_dim, rank2print, doSerial);
 	if(doSerial==1) 
 		serial_lu(generate_matrix(dim),dim);
+#if doPAPI==1
+	papi_start();
+	parallel_lu_cyclic(argc, argv, generate_matrix(dim), dim, block_dim, rank2print, doSerial, numThreads);
+	papi_report();
+#else
 	time = MPI_Wtime();
 	parallel_lu_cyclic(argc, argv, generate_matrix(dim), dim, block_dim, rank2print, doSerial, numThreads);
-	 time = MPI_Wtime() - time;
+	time = MPI_Wtime() - time;
 	MPI_Reduce(&time, &avg, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 	if(rank == 0) {
 		printf("Dim = %i, Block Dim = %i, Procs = %i, Threads = %i, Average time: %e\n", dim, block_dim, procs, numThreads, avg/procs);
 	}
+#endif
 	MPI_Finalize();
 	return 0;
 }
