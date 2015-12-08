@@ -7,6 +7,12 @@
 #include <mpi.h>
 #include <omp.h>
 
+#define doPAPI 0
+
+#if doPAPI==1
+#include "support.h"
+#endif
+
 double** generate_matrix(int dim) {
 	double **matrix = (double**) malloc(dim*sizeof(double*));
 	int i,j;
@@ -413,6 +419,11 @@ int main(int argc, char **argv) {
 	MPI_Comm_size(MPI_COMM_WORLD, &procs);
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+#if doPAPI==1
+	data = 0;
+	papi_setup();
+#endif
+
 	//Check if number of processes is a perfect square
 	if (sqrt(procs) != floor(sqrt(procs))) {
 		printf("Number of processes is not a perfect square!\n");
@@ -422,7 +433,7 @@ int main(int argc, char **argv) {
 	//Read input arguements
 	if(argc < 2) {
 		if(rank == 0)
-			fprintf(stderr,"Wrong # of arguments.\nUsage: mpirun -n procs %s dim numThreads rank2print doSerial(Only dim and numThreads are required; other 2 are optional)\n",argv[0]);
+			fprintf(stderr,"Wrong # of arguments.\nUsage: mpirun -n procs %s $dim $numThreads $rank2print $doSerial(Only dim and numThreads are required; other 2 are optional)\n",argv[0]);
 		return -1;
 	}
 	int dim = atoi(argv[1]);
@@ -443,6 +454,11 @@ int main(int argc, char **argv) {
 		printf("Running code on %i procs with dim = %i; numThreads = %i; block_dim = %i; printing on rank %i; doSerial = %i \n",procs, dim, numThreads, block_dim, rank2print, doSerial);
 	if(doSerial==1) 
 		serial_lu(generate_matrix(dim),dim);
+#if doPAPI==1
+	papi_start();
+	parallel_lu(argc, argv, generate_matrix(dim), dim, block_dim, rank2print, doSerial, numThreads);
+	papi_report();
+#else
   time = MPI_Wtime();
   parallel_lu(argc, argv, generate_matrix(dim), dim, block_dim, rank2print, doSerial, numThreads);
   time = MPI_Wtime() - time;
@@ -450,6 +466,7 @@ int main(int argc, char **argv) {
   if(rank == 0) {
     printf("Dim = %i, Procs = %i, Threads = %i, Average time: %e\n", dim, procs, numThreads, avg/procs);
   }
+#endif
   MPI_Finalize();
 	return 0;
 }
